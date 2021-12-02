@@ -1,5 +1,6 @@
 const { EventEmitter } = require('events');
 const ethUtil = require('ethereumjs-util');
+const sigUtil = require('eth-sig-util');
 const HDKey = require('hdkey');
 const TrezorConnect = require('trezor-connect').default;
 const { TransactionFactory } = require('@ethereumjs/tx');
@@ -373,9 +374,84 @@ class TrezorKeyring extends EventEmitter {
     });
   }
 
-  signTypedData() {
-    // Waiting on trezor to enable this
-    return Promise.reject(new Error('Not supported on this device'));
+  signTypedData(withAccount, data, options = {}) {
+    const isV4 = options.version === 'V4';
+
+    const { domain, types, primaryType, message } =
+      sigUtil.TypedDataUtils.sanitizeData(data);
+
+    const domainSeparatorHex = sigUtil.TypedDataUtils.hashStruct(
+      'EIP712Domain',
+      domain,
+      types,
+      isV4,
+    ).toString('hex');
+    const hashStructMessageHex = sigUtil.TypedDataUtils.hashStruct(
+      primaryType,
+      message,
+      types,
+      isV4,
+    ).toString('hex');
+
+    return new Promise((resolve, reject) => {
+      this.unlock()
+        .then((status) => {
+          setTimeout(
+            (_) => {
+              TrezorConnect.ethereumSignTypedHash({
+                path: this._pathFromAddress(withAccount),
+                domainSeparatorHex,
+                hashStructMessageHex,
+              })
+                .then((response) => {
+                  if (response.success) {
+                    if (
+                      response.payload.address !==
+                      ethUtil.toChecksumAddress(withAccount)
+                    ) {
+                      reject(
+                        new Error('signature doesnt match the right address'),
+                      );
+                    }
+                    const signature = `0x${response.payload.signature}`;
+
+                    const recoveredAddressSignedWith =
+                      sigUtil.recoverTypedSignature_v4({
+                        data,
+                        sig: signature,
+                      });
+                    if (
+                      ethUtil.toChecksumAddress(recoveredAddressSignedWith) !==
+                      ethUtil.toChecksumAddress(withAccount)
+                    ) {
+                      throw new Error(
+                        'recovered signature doesnt match the right address',
+                      );
+                    }
+
+                    resolve(signature);
+                  } else {
+                    reject(
+                      new Error(
+                        (response.payload && response.payload.error) ||
+                          'Unknown error',
+                      ),
+                    );
+                  }
+                })
+                .catch((e) => {
+                  reject(new Error((e && e.toString()) || 'Unknown error'));
+                });
+              // This is necessary to avoid popup collision
+              // between the unlock & sign trezor popups
+            },
+            status === 'just unlocked' ? DELAY_BETWEEN_POPUPS : 0,
+          );
+        })
+        .catch((e) => {
+          reject(new Error((e && e.toString()) || 'Unknown error'));
+        });
+    });
   }
 
   exportAccount() {
