@@ -409,6 +409,9 @@ class TrezorKeyring extends EventEmitter {
       message_hash, // eslint-disable-line camelcase
     } = dataWithHashes;
 
+    console.log('domain_sep', domain_separator_hash);
+    console.log('message_ha', message_hash);
+
     // This is necessary to avoid popup collision
     // between the unlock & sign trezor popups
     const status = await this.unlock();
